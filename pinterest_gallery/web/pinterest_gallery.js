@@ -43,6 +43,7 @@ app.registerExtension({
       input.className = "pinterest-gallery-search";
       input.type = "text";
       input.placeholder = "Search Pinterest...";
+      input.addEventListener("keydown", (e) => e.stopPropagation());
 
       const status = document.createElement("div");
       status.className = "pinterest-gallery-status";

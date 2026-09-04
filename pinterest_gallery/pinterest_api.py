@@ -1,3 +1,10 @@
+import json
+import time
+from urllib.parse import quote
+
+import requests
+
+
 def parse_search_response(response_json):
     resource_response = response_json.get("resource_response", {})
     data = resource_response.get("data", {})
@@ -23,12 +30,6 @@ def parse_search_response(response_json):
         bookmark = bookmark[0] if bookmark else None
     return items, bookmark
 
-
-import json
-import time
-from urllib.parse import quote
-
-import requests
 
 SEARCH_URL = "https://www.pinterest.com/resource/BaseSearchResource/get/"
 USER_AGENT = (
