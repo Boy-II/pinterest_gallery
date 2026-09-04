@@ -52,6 +52,10 @@ or publish Pinterest content, and it does not support Secret Boards.
 Sandbox tokens must use the Sandbox API environment. Production tokens must use
 the production API environment; set `PINTEREST_API_ENV` accordingly.
 
+`PINTEREST_API_ENV` only accepts `sandbox` or `production`. If it's unset,
+misspelled, or any other value, **My Boards** returns a clear error but
+**Search still works** — a bad value never takes down the whole node.
+
 ## Update
 
 ```bash
