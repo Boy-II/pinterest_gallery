@@ -1,0 +1,7 @@
+-r requirements.txt
+pytest>=7
+pytest-asyncio
+aiohttp
+pillow
+numpy
+torch
