@@ -5,7 +5,7 @@ import { app } from "/scripts/app.js";
 // Talks to the existing /civitai_gallery/images backend route (unchanged) and
 // fills the CivitaiGalleryNode's hidden "selection_data" widget with the raw
 // Civitai API item the user clicked, exactly as the Python node expects:
-//   { item: <civitai image item>, download_image: <is "image" output wired up> }
+//   { item: <civitai item>, download_image: <is "image" output wired up>, download_video: <is "video" output wired up> }
 
 const NSFW_OPTIONS = [
     ["None", "安全 (None)"],
@@ -25,6 +25,13 @@ const PERIOD_OPTIONS = [
     ["Year", "今年"],
     ["AllTime", "所有時間"],
 ];
+const BASE_MODEL_OPTIONS = [
+    ["", "All Base Models"],
+    ["Anima", "Anima"],
+    ["MiniMax H3", "MiniMax H3"],
+    ["Krea 2", "Krea 2"],
+    ["Flux.2 Klein 9B", "Flux.2 Klein 9B"],
+];
 
 function el(tag, style, props) {
     const e = document.createElement(tag);
@@ -43,6 +50,15 @@ function thumbUrl(url, width) {
 function isImageOutputConnected(node) {
     const out = node.outputs && node.outputs[2];
     return !!(out && out.links && out.links.length > 0);
+}
+
+function isVideoOutputConnected(node) {
+    const out = node.outputs && node.outputs[5];
+    return !!(out && out.links && out.links.length > 0);
+}
+
+function isVideoItem(item) {
+    return item.type === "video" || /\.(mp4|webm|mov)(\?|$)/i.test(item.url || "");
 }
 
 const selectStyle = {
@@ -67,6 +83,7 @@ function setupCivitaiGallery(node) {
         selectionWidget.value = JSON.stringify({
             item: selectedItem,
             download_image: isImageOutputConnected(node),
+            download_video: isVideoOutputConnected(node),
         });
     };
     node._civitaiRefreshSelection = refreshSelection;
@@ -89,14 +106,15 @@ function setupCivitaiGallery(node) {
     PERIOD_OPTIONS.forEach(([v, l]) => periodSelect.appendChild(el("option", null, { value: v, textContent: l })));
     periodSelect.value = "Month";
 
-    const usernameInput = el("input", { ...selectStyle, flex: "1", minWidth: "70px" }, { type: "text", placeholder: "Username" });
-    const baseModelInput = el("input", { ...selectStyle, flex: "1", minWidth: "90px" }, { type: "text", placeholder: "Base Model 篩選 (如 SDXL 1.0)" });
+    const keywordInput = el("input", { ...selectStyle, flex: "1", minWidth: "70px" }, { type: "text", placeholder: "Keyword" });
+    const baseModelSelect = el("select", { ...selectStyle, flex: "1", minWidth: "110px" });
+    BASE_MODEL_OPTIONS.forEach(([v, l]) => baseModelSelect.appendChild(el("option", null, { value: v, textContent: l })));
 
     const refreshBtn = el("button", { ...selectStyle, cursor: "pointer" }, { textContent: "🔄 Refresh" });
     const apiKeyBtn = el("button", { ...selectStyle, cursor: "pointer" }, { textContent: "🔑", title: "Civitai API Key" });
 
     filterRow1.append(nsfwSelect, sortSelect, periodSelect, refreshBtn, apiKeyBtn);
-    filterRow2.append(usernameInput, baseModelInput);
+    filterRow2.append(keywordInput, baseModelSelect);
 
     const apiKeyRow = el("div", { display: "none", gap: "4px", alignItems: "center", flexWrap: "wrap" });
     const apiKeyInput = el("input", { ...selectStyle, flex: "1", minWidth: "120px" }, { type: "password", placeholder: "Civitai API Key" });
@@ -106,9 +124,8 @@ function setupCivitaiGallery(node) {
 
     const statusEl = el("div", { opacity: "0.7", minHeight: "14px" });
 
-    const THUMB_SIZE = 90;
     const gridEl = el("div", {
-        display: "flex", flexWrap: "wrap", alignContent: "flex-start",
+        display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "min-content",
         gap: "4px", overflowY: "auto", overflowX: "hidden", flex: "1 1 0", minHeight: "0",
         border: "1px solid #444", borderRadius: "4px", padding: "4px", background: "#161616",
     });
@@ -129,19 +146,10 @@ function setupCivitaiGallery(node) {
     let loading = false;
     let allItems = [];
 
-    function matchesBaseModel(item) {
-        const f = baseModelInput.value.trim().toLowerCase();
-        if (!f) return true;
-        return (item.baseModel || "").toLowerCase().includes(f);
-    }
-
     function renderGrid() {
         gridEl.innerHTML = "";
-        const filtered = allItems.filter(matchesBaseModel);
-        filtered.forEach((item) => gridEl.appendChild(buildThumb(item)));
-        statusEl.textContent = filtered.length
-            ? `已載入 ${filtered.length} / ${allItems.length} 張圖片`
-            : (allItems.length ? "沒有符合 Base Model 篩選的圖片" : "沒有找到符合的圖片");
+        allItems.forEach((item) => gridEl.appendChild(buildThumb(item)));
+        statusEl.textContent = allItems.length ? `已載入 ${allItems.length} 張圖片` : "沒有找到符合的圖片";
     }
 
     function buildParams() {
@@ -151,7 +159,8 @@ function setupCivitaiGallery(node) {
             period: periodSelect.value,
             domain: "civitai.red",
         });
-        if (usernameInput.value.trim()) p.set("username", usernameInput.value.trim());
+        if (keywordInput.value.trim()) p.set("query", keywordInput.value.trim());
+        if (baseModelSelect.value) p.set("baseModels", baseModelSelect.value);
         if (cursor) p.set("cursor", cursor);
         return p;
     }
@@ -185,15 +194,32 @@ function setupCivitaiGallery(node) {
 
     function buildThumb(item) {
         const wrap = el("div", {
-            position: "relative", width: `${THUMB_SIZE}px`, height: `${THUMB_SIZE}px`, flex: "0 0 auto",
+            position: "relative", width: "100%", aspectRatio: "1 / 1",
             overflow: "hidden", borderRadius: "3px",
             cursor: "pointer", border: "2px solid transparent", background: "#111",
+            boxSizing: "border-box",
         });
         if (item === selectedItem) wrap.style.borderColor = "#4a7";
-        const img = el("img", { width: "100%", height: "100%", objectFit: "cover", display: "block" });
-        img.loading = "lazy";
-        img.src = thumbUrl(item.url, 300);
-        wrap.appendChild(img);
+        const media = isVideoItem(item)
+            ? document.createElement("video")
+            : document.createElement("img");
+        Object.assign(media.style, { width: "100%", height: "100%", objectFit: "cover", display: "block" });
+        if (isVideoItem(item)) {
+            media.muted = true;
+            media.loop = true;
+            media.playsInline = true;
+            media.preload = "metadata";
+            media.src = item.url;
+            wrap.addEventListener("mouseenter", () => media.play?.().catch(() => {}));
+            wrap.addEventListener("mouseleave", () => {
+                media.pause?.();
+                media.currentTime = 0;
+            });
+        } else {
+            media.loading = "lazy";
+            media.src = thumbUrl(item.url, 300);
+        }
+        wrap.appendChild(media);
         wrap.addEventListener("click", () => selectItem(item, wrap));
         return wrap;
     }
@@ -232,28 +258,11 @@ function setupCivitaiGallery(node) {
         detailEl.style.display = "flex";
         const meta = item.meta || {};
 
-        detailEl.appendChild(el("div", { opacity: "0.75" }, {
-            textContent: `👤 ${item.username || "?"}  |  ${item.width || "?"}x${item.height || "?"}  |  ${item.baseModel || ""}`,
+        detailEl.appendChild(el("div", { opacity: "0.75", fontWeight: "600" }, {
+            textContent: `Base Model: ${item.baseModel || ""}`,
         }));
-
         detailEl.appendChild(buildPromptBox("Positive Prompt", meta.prompt));
         detailEl.appendChild(buildPromptBox("Negative Prompt", meta.negativePrompt));
-
-        const otherKeys = Object.keys(meta).filter((k) => k !== "prompt" && k !== "negativePrompt");
-        if (otherKeys.length) {
-            const paramsBox = el("div", {
-                display: "flex", flexDirection: "column", gap: "2px",
-                background: "#151515", border: "1px solid #333", borderRadius: "3px", padding: "4px",
-            });
-            otherKeys.forEach((k) => {
-                let v = meta[k];
-                if (v && typeof v === "object") v = JSON.stringify(v);
-                paramsBox.appendChild(el("div", null, { textContent: `${k}: ${v}` }));
-            });
-            detailEl.appendChild(paramsBox);
-        } else {
-            detailEl.appendChild(el("div", { opacity: "0.6", fontStyle: "italic" }, { textContent: "此圖片未公開生成參數" }));
-        }
     }
 
     async function refreshApiKeyStatus() {
@@ -300,8 +309,8 @@ function setupCivitaiGallery(node) {
     refreshBtn.addEventListener("click", () => loadImages(true));
     loadMoreBtn.addEventListener("click", () => loadImages(false));
     [nsfwSelect, sortSelect, periodSelect].forEach((e) => e.addEventListener("change", () => loadImages(true)));
-    usernameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") loadImages(true); });
-    baseModelInput.addEventListener("input", () => renderGrid());
+    keywordInput.addEventListener("keydown", (e) => { if (e.key === "Enter") loadImages(true); });
+    baseModelSelect.addEventListener("change", () => loadImages(true));
 
     loadImages(true);
 }

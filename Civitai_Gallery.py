@@ -11,6 +11,8 @@ import urllib.request
 import time
 import folder_paths
 import asyncio
+import hashlib
+import tempfile
 
 download_tasks = {}
 
@@ -84,8 +86,8 @@ class CivitaiGalleryNode:
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "IMAGE", "STRING",)
-    RETURN_NAMES = ("positive_prompt", "negative_prompt", "image", "info",)
+    RETURN_TYPES = ("STRING", "STRING", "IMAGE", "STRING", "STRING", "VIDEO")
+    RETURN_NAMES = ("positive_prompt", "negative_prompt", "image", "info", "video_url", "video")
     FUNCTION = "get_selected_data"
     CATEGORY = "📜Asset Gallery/Civitai"
 
@@ -96,13 +98,16 @@ class CivitaiGalleryNode:
             node_selection = {}
         item_data = node_selection.get("item", {})
         should_download = node_selection.get("download_image", False)
+        should_download_video = node_selection.get("download_video", False)
         meta = item_data.get("meta", {}) if item_data else {}
         pos_prompt = meta.get("prompt", "") if meta else ""
         neg_prompt = meta.get("negativePrompt", "") if meta else ""
         image_url = item_data.get("url", "") if item_data else ""
+        video_url = image_url if item_data.get("type") == "video" else ""
+        video = None
         info_string = json.dumps(item_data, indent=4, ensure_ascii=False)
         tensor = torch.zeros(1, 1, 1, 3)
-        if should_download and image_url:
+        if should_download and image_url and item_data.get("type") != "video":
             print("CivitaiGalleryNode: Frontend reports image output is connected. Starting download.")
             try:
                 req = urllib.request.Request(image_url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -115,59 +120,133 @@ class CivitaiGalleryNode:
                 print(f"CivitaiGallery: Failed to download or process image from {image_url}. Error: {e}")
         elif should_download:
             print("CivitaiGalleryNode: Image output connected, but no URL was selected or found.")
-        return (pos_prompt, neg_prompt, tensor, info_string,)
+        if should_download_video and video_url:
+            try:
+                video = _video_from_url(video_url)
+            except Exception as e:
+                print(f"CivitaiGallery: Failed to download or process video from {video_url}. Error: {e}")
+        return (pos_prompt, neg_prompt, tensor, info_string, video_url, video)
 
 prompt_server = server.PromptServer.instance
 
-@prompt_server.routes.get("/civitai_gallery/images")
-async def get_civitai_images(request):
-    nsfw = request.query.get('nsfw', 'None')
-    sort = request.query.get('sort', 'Most Reactions')
-    period = request.query.get('period', 'Day')
-    username = request.query.get('username', '')
-    international_version = request.query.get('international_version', 'false').lower() in ['true', '1']
-    domain = request.query.get('domain', '')
-    cursor = request.query.get('cursor', None)
-    tags_query = request.query.get('tags', None)
-    model_id = request.query.get('modelId', None)
-    model_version_id = request.query.get('modelVersionId', None)
-    
-    base_domain = resolve_domain(domain, international_version)
-    api_url = f"https://{base_domain}/api/v1/images"
-    
-    params = {}
+def _video_from_url(video_url):
+    from comfy_api.latest import InputImpl
 
+    ext = os.path.splitext(video_url.split("?", 1)[0])[1] or ".mp4"
+    digest = hashlib.sha256(video_url.encode("utf-8")).hexdigest()[:16]
+    try:
+        temp_dir = folder_paths.get_temp_directory()
+    except Exception:
+        temp_dir = tempfile.gettempdir()
+    os.makedirs(temp_dir, exist_ok=True)
+    local_path = os.path.join(temp_dir, f"civitai_gallery_{digest}{ext}")
+    if not os.path.exists(local_path):
+        req = urllib.request.Request(video_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=60) as response:
+            with open(local_path, "wb") as f:
+                f.write(response.read())
+    return InputImpl.VideoFromFile(local_path)
+
+
+def _build_image_params(nsfw, sort, period, base_model, cursor, model_id, model_version_id):
     if model_version_id:
         params = {
             'modelVersionId': model_version_id,
             'limit': 50,
             'sort': sort,
             'period': period,
-            'nsfw': nsfw
+            'nsfw': nsfw,
         }
+        if base_model:
+            params['baseModels'] = base_model
     elif model_id:
         params = {
             'modelId': model_id,
             'limit': 50,
             'sort': sort,
             'period': period,
-            'nsfw': nsfw
+            'nsfw': nsfw,
         }
+        if base_model:
+            params['baseModels'] = base_model
     else:
         params = {
-            'limit': 50, 
-            'nsfw': nsfw, 
-            'sort': sort, 
-            'period': period, 
-            'username': username
+            'limit': 50,
+            'nsfw': nsfw,
+            'sort': sort,
+            'period': period,
         }
-        if tags_query:
-            params['tags'] = tags_query
+        if base_model:
+            params['baseModels'] = base_model
 
     params['withMeta'] = 'true'
-
     if cursor:
         params['cursor'] = cursor
+    return params
+
+
+def _build_model_search_params(query, base_model, cursor):
+    params = {
+        'limit': 8,
+        'query': query,
+    }
+    if base_model:
+        params['baseModels'] = base_model
+    if cursor:
+        params['cursor'] = cursor
+    return params
+
+
+async def _fetch_json(session, url, params, headers):
+    async with session.get(url, params=params, headers=headers) as response:
+        response.raise_for_status()
+        return await response.json()
+
+
+async def _fetch_keyword_images(session, base_domain, headers, query, base_model, nsfw, sort, period, cursor):
+    models_url = f"https://{base_domain}/api/v1/models"
+    images_url = f"https://{base_domain}/api/v1/images"
+    models_data = await _fetch_json(
+        session,
+        models_url,
+        _build_model_search_params(query, base_model, cursor),
+        headers,
+    )
+    items = []
+    for model in (models_data.get("items") or [])[:8]:
+        model_id = model.get("id")
+        if not model_id:
+            continue
+        image_params = _build_image_params(nsfw, sort, period, base_model, None, model_id, None)
+        image_params["limit"] = 8
+        image_data = await _fetch_json(session, images_url, image_params, headers)
+        items.extend(image_data.get("items") or [])
+        if len(items) >= 50:
+            items = items[:50]
+            break
+    return {
+        "items": items,
+        "metadata": {"nextCursor": (models_data.get("metadata") or {}).get("nextCursor")},
+    }
+
+
+@prompt_server.routes.get("/civitai_gallery/images")
+async def get_civitai_images(request):
+    nsfw = request.query.get('nsfw', 'None')
+    sort = request.query.get('sort', 'Most Reactions')
+    period = request.query.get('period', 'Day')
+    query = request.query.get('query', '').strip()
+    base_model = request.query.get('baseModels', '').strip()
+    international_version = request.query.get('international_version', 'false').lower() in ['true', '1']
+    domain = request.query.get('domain', '')
+    cursor = request.query.get('cursor', None)
+    model_id = request.query.get('modelId', None)
+    model_version_id = request.query.get('modelVersionId', None)
+    
+    base_domain = resolve_domain(domain, international_version)
+    api_url = f"https://{base_domain}/api/v1/images"
+    
+    params = _build_image_params(nsfw, sort, period, base_model, cursor, model_id, model_version_id)
 
     config = load_config()
     api_key = config.get("civitai_api_key")
@@ -184,9 +263,10 @@ async def get_civitai_images(request):
     for attempt in range(max_retries):
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(api_url, params=params, headers=headers) as response:
-                    response.raise_for_status()
-                    data = await response.json()
+                if query and not model_id and not model_version_id:
+                    data = await _fetch_keyword_images(session, base_domain, headers, query, base_model, nsfw, sort, period, cursor)
+                else:
+                    data = await _fetch_json(session, api_url, params, headers)
                     return web.json_response(data)
         except Exception as e:
             if attempt == max_retries - 1:
