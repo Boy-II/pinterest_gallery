@@ -3,7 +3,7 @@ import { app } from "../../scripts/app.js";
 const CSS = `
 .pinterest-gallery-wrap { display:flex; flex-direction:column; gap:4px; width:100%; height:100%; box-sizing:border-box; }
 .pinterest-gallery-search { width:100%; box-sizing:border-box; }
-.pinterest-gallery-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; grid-auto-rows:min-content; flex:1 1 auto; min-height:80px; overflow-y:auto; background:#1a1a1a; padding:4px; border-radius:4px; }
+.pinterest-gallery-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; grid-auto-rows:min-content; flex:1 1 auto; min-height:0; overflow-y:auto; background:#1a1a1a; padding:4px; border-radius:4px; }
 .pinterest-gallery-thumb { width:100%; aspect-ratio:1/1; object-fit:cover; cursor:pointer; border:2px solid transparent; border-radius:3px; display:block; }
 .pinterest-gallery-thumb.selected { border-color:#4caf50; }
 .pinterest-gallery-status { font-size:11px; color:#aaa; min-height:14px; }
@@ -137,23 +137,18 @@ app.registerExtension({
       );
       observer.observe(sentinel);
 
-      const uiWidget = node.addDOMWidget("pinterest_gallery_ui", "div", wrap, {
-        serialize: false,
-      });
+      // ComfyUI stretches this widget's element to fill the node frame; the
+      // grid flex-fills that element and scrolls internally. Do NOT override
+      // computeSize from the element's content height — that feeds back into
+      // the node size and the frame grows without bound.
+      node.addDOMWidget("pinterest_gallery_ui", "div", wrap, { serialize: false });
 
-      // Let the gallery track the node frame: hand ComfyUI's layout whatever
-      // vertical space it allocated to this widget (it distributes leftover
-      // node height here), with a small floor so it never collapses.
-      uiWidget.computeSize = function (width) {
-        return [width, Math.max(this.computedHeight ?? 300, 120)];
-      };
-
-      // Give a tidy starting size, and repair the oversized default that
-      // earlier versions of this widget baked into saved workflows.
+      // One-shot: give a tidy starting size, and shrink the oversized frame
+      // that an earlier build of this widget baked into saved workflows.
       requestAnimationFrame(() => {
         let [w, h] = node.size;
         w = Math.max(w, 320);
-        if (h < 300 || h > 520) h = 380;
+        if (h < 300 || h > 560) h = 380;
         node.setSize([w, h]);
         node.setDirtyCanvas?.(true, true);
       });
