@@ -3,7 +3,7 @@ import { app } from "../../scripts/app.js";
 const CSS = `
 .pinterest-gallery-wrap { display:flex; flex-direction:column; gap:4px; width:100%; height:100%; box-sizing:border-box; }
 .pinterest-gallery-search { width:100%; box-sizing:border-box; }
-.pinterest-gallery-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; grid-auto-rows:min-content; flex:1 1 auto; min-height:0; overflow-y:auto; background:#1a1a1a; padding:4px; border-radius:4px; }
+.pinterest-gallery-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; grid-auto-rows:min-content; flex:1 1 auto; min-height:0; max-height:75vh; overflow-y:auto; background:#1a1a1a; padding:4px; border-radius:4px; }
 .pinterest-gallery-thumb { width:100%; aspect-ratio:1/1; object-fit:cover; cursor:pointer; border:2px solid transparent; border-radius:3px; display:block; }
 .pinterest-gallery-thumb.selected { border-color:#4caf50; }
 .pinterest-gallery-status { font-size:11px; color:#aaa; min-height:14px; }
