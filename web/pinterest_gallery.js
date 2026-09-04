@@ -1,9 +1,9 @@
 import { app } from "../../scripts/app.js";
 
 const CSS = `
-.pinterest-gallery-wrap { display:flex; flex-direction:column; gap:4px; width:100%; }
+.pinterest-gallery-wrap { display:flex; flex-direction:column; gap:4px; width:100%; height:100%; box-sizing:border-box; }
 .pinterest-gallery-search { width:100%; box-sizing:border-box; }
-.pinterest-gallery-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; max-height:260px; overflow-y:auto; background:#1a1a1a; padding:4px; border-radius:4px; }
+.pinterest-gallery-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; grid-auto-rows:min-content; flex:1 1 auto; min-height:80px; overflow-y:auto; background:#1a1a1a; padding:4px; border-radius:4px; }
 .pinterest-gallery-thumb { width:100%; aspect-ratio:1/1; object-fit:cover; cursor:pointer; border:2px solid transparent; border-radius:3px; display:block; }
 .pinterest-gallery-thumb.selected { border-color:#4caf50; }
 .pinterest-gallery-status { font-size:11px; color:#aaa; min-height:14px; }
@@ -137,7 +137,26 @@ app.registerExtension({
       );
       observer.observe(sentinel);
 
-      node.addDOMWidget("pinterest_gallery_ui", "div", wrap, { serialize: false });
+      const uiWidget = node.addDOMWidget("pinterest_gallery_ui", "div", wrap, {
+        serialize: false,
+      });
+
+      // Let the gallery track the node frame: hand ComfyUI's layout whatever
+      // vertical space it allocated to this widget (it distributes leftover
+      // node height here), with a small floor so it never collapses.
+      uiWidget.computeSize = function (width) {
+        return [width, Math.max(this.computedHeight ?? 300, 120)];
+      };
+
+      // Give a tidy starting size, and repair the oversized default that
+      // earlier versions of this widget baked into saved workflows.
+      requestAnimationFrame(() => {
+        let [w, h] = node.size;
+        w = Math.max(w, 320);
+        if (h < 300 || h > 520) h = 380;
+        node.setSize([w, h]);
+        node.setDirtyCanvas?.(true, true);
+      });
 
       const onRemoved = node.onRemoved;
       node.onRemoved = function () {
