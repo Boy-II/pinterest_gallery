@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+
+# Civitai/Gelbooru local data files (API keys, caches) — never commit.
+config.json
+civitai_ui_state.json
+civitai_favorites.json
+gelbooru_prompt_cache.json
