@@ -89,8 +89,9 @@ def parse_board_pins_response(response_json):
         entries.sort(key=lambda entry: entry[2])
         image_url = entries[-1][1]
         preferred_thumbs = ("400x300", "236x", "150x150", "236x236")
+        urls_by_size = {key: url for key, url, _ in entries}
         thumbnail_url = next(
-            (url for key, url, _ in entries if key in preferred_thumbs),
+            (urls_by_size[key] for key in preferred_thumbs if key in urls_by_size),
             entries[0][1],
         )
         items.append(

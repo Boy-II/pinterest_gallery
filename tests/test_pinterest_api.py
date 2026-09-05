@@ -69,7 +69,7 @@ def test_parse_boards_response_extracts_items_and_bookmark():
     assert bookmark == "next"
 
 
-def test_parse_board_pins_chooses_largest_image_and_skips_missing_media():
+def test_parse_board_pins_chooses_preferred_thumbnail_and_largest_image():
     items, bookmark = parse_board_pins_response(
         {
             "items": [
@@ -78,6 +78,7 @@ def test_parse_board_pins_chooses_largest_image_and_skips_missing_media():
                     "media": {
                         "images": {
                             "150x150": {"url": "https://i.pinimg.com/150.jpg", "width": 150, "height": 150},
+                            "400x300": {"url": "https://i.pinimg.com/400.jpg", "width": 400, "height": 300},
                             "orig": {"url": "https://i.pinimg.com/orig.jpg", "width": 1000, "height": 800},
                         }
                     },
@@ -87,7 +88,7 @@ def test_parse_board_pins_chooses_largest_image_and_skips_missing_media():
             "bookmark": None,
         }
     )
-    assert items == [{"id": "p1", "thumbnail_url": "https://i.pinimg.com/150.jpg", "image_url": "https://i.pinimg.com/orig.jpg"}]
+    assert items == [{"id": "p1", "thumbnail_url": "https://i.pinimg.com/400.jpg", "image_url": "https://i.pinimg.com/orig.jpg"}]
     assert bookmark is None
 
 

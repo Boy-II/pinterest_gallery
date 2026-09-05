@@ -71,6 +71,26 @@ app.registerExtension({
       let loading = false;
       let debounceTimer = null;
       let requestGeneration = 0;
+      let activeController = null;
+
+      const cancelActiveRequest = () => {
+        activeController?.abort();
+        activeController = null;
+        loading = false;
+      };
+
+      const startRequest = () => {
+        const controller = new AbortController();
+        activeController = controller;
+        loading = true;
+        return controller;
+      };
+
+      const finishRequest = (controller) => {
+        if (activeController !== controller) return;
+        activeController = null;
+        loading = false;
+      };
 
       const clearResults = () => {
         grid.querySelectorAll(".pinterest-gallery-thumb").forEach((el) => el.remove());
@@ -98,8 +118,8 @@ app.registerExtension({
         }
       };
 
-      const request = async (url, options) => {
-        const resp = await fetch(url, options);
+      const request = async (url, options, signal) => {
+        const resp = await fetch(url, { ...(options || {}), signal });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error || "Pinterest request failed");
         return data;
@@ -107,21 +127,22 @@ app.registerExtension({
 
       const requestItems = async (url, options, generation, emptyMessage) => {
         if (loading) return;
-        loading = true;
+        const controller = startRequest();
         status.textContent = "Loading...";
         try {
-          const data = await request(url, options);
+          const data = await request(url, options, controller.signal);
           if (generation !== requestGeneration) return;
           addItems(data.items || []);
           bookmark = data.bookmark || null;
           status.textContent = data.items?.length ? "" : emptyMessage;
         } catch (err) {
+          if (err.name === "AbortError") return;
           if (generation === requestGeneration) {
             status.textContent = err.message || "Pinterest request failed";
             bookmark = null;
           }
         } finally {
-          loading = false;
+          finishRequest(controller);
         }
       };
 
@@ -140,29 +161,42 @@ app.registerExtension({
 
       const loadBoards = async (generation) => {
         if (loading) return;
-        loading = true;
+        const controller = startRequest();
         status.textContent = "Loading boards...";
         boardSelect.disabled = true;
         try {
-          const data = await request("/pinterest_gallery/boards");
-          if (generation !== requestGeneration) return;
+          const boards = [];
+          const seenBookmarks = new Set();
+          let nextBookmark = null;
+          do {
+            const suffix = nextBookmark ? `?bookmark=${encodeURIComponent(nextBookmark)}` : "";
+            const data = await request(`/pinterest_gallery/boards${suffix}`, undefined, controller.signal);
+            if (generation !== requestGeneration) return;
+            boards.push(...(data.items || []));
+            nextBookmark = data.bookmark || null;
+            if (nextBookmark && seenBookmarks.has(nextBookmark)) break;
+            if (nextBookmark) seenBookmarks.add(nextBookmark);
+          } while (nextBookmark);
+
           boardSelect.innerHTML = '<option value="">Select a board...</option>';
-          for (const board of data.items || []) {
+          for (const board of boards) {
             const option = document.createElement("option");
             option.value = board.id;
             option.textContent = board.name || board.id;
             boardSelect.appendChild(option);
           }
           boardSelect.disabled = false;
-          status.textContent = data.items?.length ? "" : "No boards found";
+          status.textContent = boards.length ? "" : "No boards found";
         } catch (err) {
+          if (err.name === "AbortError") return;
           if (generation === requestGeneration) status.textContent = err.message || "Unable to load boards";
         } finally {
-          loading = false;
+          finishRequest(controller);
         }
       };
 
       modeSelect.addEventListener("change", () => {
+        cancelActiveRequest();
         mode = modeSelect.value;
         requestGeneration += 1;
         currentQuery = "";
@@ -176,6 +210,7 @@ app.registerExtension({
       });
 
       boardSelect.addEventListener("change", () => {
+        cancelActiveRequest();
         currentBoard = boardSelect.value;
         requestGeneration += 1;
         clearResults();
@@ -186,11 +221,19 @@ app.registerExtension({
       input.addEventListener("input", () => {
         clearTimeout(debounceTimer);
         const query = input.value.trim();
-        debounceTimer = setTimeout(() => {
-          if (!query || query === currentQuery || mode !== "search") return;
+        if (query !== currentQuery) {
+          cancelActiveRequest();
           requestGeneration += 1;
-          currentQuery = query;
+          currentQuery = "";
           clearResults();
+        }
+        if (!query) {
+          status.textContent = "";
+          return;
+        }
+        debounceTimer = setTimeout(() => {
+          if (query === currentQuery || mode !== "search") return;
+          currentQuery = query;
           runSearch(query, null, requestGeneration);
         }, 500);
       });
@@ -221,6 +264,7 @@ app.registerExtension({
       const onRemoved = node.onRemoved;
       node.onRemoved = function () {
         clearTimeout(debounceTimer);
+        cancelActiveRequest();
         observer.disconnect();
         onRemoved?.apply(this, arguments);
       };
