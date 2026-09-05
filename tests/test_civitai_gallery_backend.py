@@ -3,6 +3,9 @@ import json
 import sys
 import types
 
+import aiohttp
+import pytest
+
 
 class _Routes:
     def get(self, _path):
@@ -80,3 +83,77 @@ def test_civitai_node_outputs_video_url_and_native_video(monkeypatch):
     assert result[1] == "negative"
     assert result[4] == "https://image.civitai.com/example.mp4"
     assert result[5] is fake_video
+
+
+class _FakeSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_keyword_route_returns_json_response(monkeypatch):
+    module = _load_civitai_gallery(monkeypatch)
+    monkeypatch.setattr(module, "load_config", lambda: {})
+    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda timeout: _FakeSession())
+
+    async def fake_fetch(*_args):
+        return {"items": [{"id": 1, "name": "Moody"}], "metadata": {}}
+
+    monkeypatch.setattr(module, "_fetch_keyword_images", fake_fetch)
+    request = types.SimpleNamespace(
+        query={
+            "query": "Moody",
+            "nsfw": "None",
+            "sort": "Most Reactions",
+            "period": "Day",
+            "domain": "civitai.red",
+        }
+    )
+
+    response = await module.get_civitai_images(request)
+
+    assert response is not None
+    assert response.status == 200
+    assert json.loads(response.text)["items"][0]["name"] == "Moody"
+
+
+@pytest.mark.asyncio
+async def test_keyword_route_uses_retry_after_for_503(monkeypatch):
+    module = _load_civitai_gallery(monkeypatch)
+    sleeps = []
+    monkeypatch.setattr(module, "load_config", lambda: {})
+    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda timeout: _FakeSession())
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(module.asyncio, "sleep", fake_sleep)
+
+    async def overloaded(*_args):
+        raise aiohttp.ClientResponseError(
+            request_info=types.SimpleNamespace(real_url="https://civitai.red/api/v1/models"),
+            history=(),
+            status=503,
+            message="Service Unavailable",
+            headers={"Retry-After": "2"},
+        )
+
+    monkeypatch.setattr(module, "_fetch_keyword_images", overloaded)
+    request = types.SimpleNamespace(
+        query={
+            "query": "Moody",
+            "nsfw": "None",
+            "sort": "Most Reactions",
+            "period": "Day",
+            "domain": "civitai.red",
+        }
+    )
+
+    response = await module.get_civitai_images(request)
+
+    assert sleeps == [2.0, 2.0]
+    assert response.status == 503
+    assert "temporarily overloaded" in json.loads(response.text)["error"]

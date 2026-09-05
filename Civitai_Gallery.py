@@ -230,6 +230,21 @@ async def _fetch_keyword_images(session, base_domain, headers, query, base_model
     }
 
 
+def _retry_delay_from_error(error, default=1.0):
+    retry_after = getattr(error, "headers", {}).get("Retry-After") if getattr(error, "headers", None) else None
+    try:
+        return float(retry_after)
+    except (TypeError, ValueError):
+        return default
+
+
+def _error_status_and_message(error):
+    status = getattr(error, "status", 500) or 500
+    if status == 503:
+        return status, "Civitai model search is temporarily overloaded. Please retry."
+    return status, str(error)
+
+
 @prompt_server.routes.get("/civitai_gallery/images")
 async def get_civitai_images(request):
     nsfw = request.query.get('nsfw', 'None')
@@ -265,14 +280,16 @@ async def get_civitai_images(request):
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 if query and not model_id and not model_version_id:
                     data = await _fetch_keyword_images(session, base_domain, headers, query, base_model, nsfw, sort, period, cursor)
+                    return web.json_response(data)
                 else:
                     data = await _fetch_json(session, api_url, params, headers)
                     return web.json_response(data)
         except Exception as e:
             if attempt == max_retries - 1:
                 print(f"CivitaiGallery: Failed to fetch images after {max_retries} attempts. Error: {e}")
-                return web.json_response({"error": str(e)}, status=500)
-            await asyncio.sleep(1)
+                status, message = _error_status_and_message(e)
+                return web.json_response({"error": message}, status=status)
+            await asyncio.sleep(_retry_delay_from_error(e))
             print(f"CivitaiGallery: Connection failed, retrying ({attempt + 1}/{max_retries})...")
 
 @prompt_server.routes.post("/civitai_gallery/set_ui_state")
