@@ -1,273 +1,178 @@
+import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
+import { createInlineGallery } from "./gallery_inline.js?v=4";
+import { openBoardSave, openGallery, openGalleryAccount, subscribeAccountChanges } from "./gallery_panel.js?v=4";
+import { pinterestImageUrl } from "./gallery_media.js";
 
-const CSS = `
-.pinterest-gallery-wrap { display:flex; flex-direction:column; gap:4px; width:100%; height:100%; box-sizing:border-box; }
-.pinterest-gallery-controls { display:flex; gap:4px; width:100%; }
-.pinterest-gallery-mode, .pinterest-gallery-board, .pinterest-gallery-search { min-width:0; width:100%; box-sizing:border-box; }
-.pinterest-gallery-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; grid-auto-rows:min-content; flex:1 1 auto; min-height:0; max-height:75vh; overflow-y:auto; background:#1a1a1a; padding:4px; border-radius:4px; }
-.pinterest-gallery-thumb { width:100%; aspect-ratio:1/1; object-fit:cover; cursor:pointer; border:2px solid transparent; border-radius:3px; display:block; }
-.pinterest-gallery-thumb.selected { border-color:#4caf50; }
-.pinterest-gallery-status { font-size:11px; color:#aaa; min-height:14px; }
-`;
+const loaderType = "PinterestGalleryLoader";
+const openCommand = "pinterest-gallery.open";
+const galleryTitle = "Pinterest 画廊";
+const widgetHeight = 345;
+const galleryByNode = new WeakMap();
+const request = (url, options) => api.fetchApi(url, options);
+let closeGallery, closeOverlay;
 
-function injectCss() {
-  if (document.getElementById("pinterest-gallery-css")) return;
-  const style = document.createElement("style");
-  style.id = "pinterest-gallery-css";
-  style.textContent = CSS;
-  document.head.appendChild(style);
+function loadGalleryStyle() {
+  for (const stylesheet of ["gallery_panel.css", "gallery_inline.css"]) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = new URL(`./${stylesheet}?v=4`, import.meta.url).href;
+    document.head.append(link);
+  }
+}
+
+function selectedWidget(node) {
+  return node?.widgets?.find(widget => widget.name === "selected_pin");
+}
+
+function pinUrl(value) {
+  const url = pinterestImageUrl(value);
+  if (!url) throw new Error("这张图的地址不能用于 Pinterest 加载节点。");
+  return url;
+}
+
+function readSelection(node) {
+  try {
+    const pin = JSON.parse(selectedWidget(node)?.value || "null");
+    return pinterestImageUrl(pin?.image_url) ? pin : null;
+  } catch {
+    return null;
+  }
+}
+
+function addPinMetadata(pin, selection) {
+  if (typeof pin.pin_id === "string" && /^\d+$/.test(pin.pin_id)) selection.pin_id = pin.pin_id;
+  if (typeof pin.source_url === "string") selection.source_url = pin.source_url;
+  try {
+    if (pin.thumbnail_url) selection.thumbnail_url = pinUrl(pin.thumbnail_url);
+  } catch { /* The original image remains available for browsers without a thumbnail. */ }
+  if (Number.isInteger(pin.width) && pin.width > 0) selection.width = pin.width;
+  if (Number.isInteger(pin.height) && pin.height > 0) selection.height = pin.height;
+  return selection;
+}
+
+function outputSelection(node, pin) {
+  const widget = selectedWidget(node);
+  if (!widget) throw new Error("当前工作流里的画廊节点已移除，请重新选择节点。");
+  const selection = addPinMetadata(pin, {
+    id: String(pin.id ?? pin.pin_id ?? ""),
+    image_url: pinUrl(pin.image_url),
+    title: typeof pin.title === "string" ? pin.title.trim().slice(0, 150) : "",
+  });
+  node.graph?.beforeChange?.();
+  try {
+    widget.value = JSON.stringify(selection);
+    galleryByNode.get(node)?.applySelection(selection);
+    node.setDirtyCanvas?.(true, true);
+  } finally {
+    node.graph?.afterChange?.();
+  }
+}
+
+function nodeLabel(node) {
+  return `${node.title || galleryTitle} #${node.id}`;
+}
+
+function openForWorkflow(preferredNode, initialState, previewOnOpen = false) {
+  if (closeGallery) return;
+  const graph = preferredNode?.graph ?? app.canvas?.graph ?? app.graph;
+  const loaders = (graph?._nodes ?? []).filter(node => node.type === loaderType);
+  const selectedLoaders = loaders.filter(node => app.canvas?.selected_nodes?.[node.id] === node);
+  let selected = preferredNode && loaders.includes(preferredNode) ? preferredNode :
+    selectedLoaders.length === 1 ? selectedLoaders[0] : loaders[0];
+  const sourceNode = selected;
+  const inline = galleryByNode.get(sourceNode);
+
+  closeGallery = openGallery({
+    request,
+    initialState: initialState ?? inline?.getState(),
+    previewOnOpen,
+    targetLabel: () => selected ? nodeLabel(selected) : "此工作流还没有 Pinterest 画廊",
+    mountTarget: loaders.length > 1 ? host => {
+      const select = document.createElement("select");
+      select.setAttribute("aria-label", "送入的画廊节点");
+      for (const node of loaders) {
+        const option = new Option(nodeLabel(node), String(node.id), false, node === selected);
+        select.add(option);
+      }
+      select.addEventListener("change", () => {
+        selected = loaders.find(node => String(node.id) === select.value);
+      });
+      host.replaceChildren(select);
+    } : undefined,
+    onPick(pin) {
+      if (!selected || graph?.getNodeById?.(selected.id) !== selected) {
+        throw new Error("请先打开 Pinterest 三节点收藏工作流，再把图片送入其中的画廊节点。");
+      }
+      outputSelection(selected, pin);
+    },
+    onClose(state) {
+      closeGallery = null;
+      inline?.applyState({ ...state, selected: readSelection(sourceNode) });
+    },
+  });
+}
+
+function openOverlay(open, options) {
+  if (closeOverlay) return;
+  closeOverlay = open({ request, ...options, onClose: () => { closeOverlay = null; } });
 }
 
 app.registerExtension({
   name: "pinterest_gallery.widget",
+  setup: loadGalleryStyle,
+  commands: [{ id: openCommand, label: "Pinterest 画廊", function: () => openForWorkflow() }],
+  menuCommands: [{ path: ["Extensions"], commands: [openCommand] }],
   async beforeRegisterNodeDef(nodeType, nodeData) {
-    if (nodeData.name !== "PinterestGalleryLoader") return;
+    if (nodeData.name !== loaderType) return;
 
     const onNodeCreated = nodeType.prototype.onNodeCreated;
-    nodeType.prototype.onNodeCreated = function () {
-      onNodeCreated?.apply(this, arguments);
-      injectCss();
-
-      const node = this;
-      const selectedWidget = node.widgets.find((w) => w.name === "selected_pin");
-      if (selectedWidget) {
-        // Keep it as a real serialized widget (so its value ships with the
-        // prompt) but stop LiteGraph from drawing/sizing it.
-        selectedWidget.computeSize = () => [0, -4];
-        selectedWidget.draw = () => {};
+    nodeType.prototype.onNodeCreated = function (...args) {
+      const result = onNodeCreated?.apply(this, args);
+      const widget = selectedWidget(this);
+      if (widget) {
+        // Keep selected_pin serialized so workflows saved by the old widget load as before.
+        widget.computeSize = () => [0, -4];
+        widget.draw = () => {};
       }
 
-      const wrap = document.createElement("div");
-      wrap.className = "pinterest-gallery-wrap";
-      const controls = document.createElement("div");
-      controls.className = "pinterest-gallery-controls";
-      const modeSelect = document.createElement("select");
-      modeSelect.className = "pinterest-gallery-mode";
-      modeSelect.innerHTML = '<option value="search">Search</option><option value="boards">My Boards</option>';
-      const boardSelect = document.createElement("select");
-      boardSelect.className = "pinterest-gallery-board";
-      boardSelect.disabled = true;
-      boardSelect.innerHTML = '<option value="">Select a board...</option>';
-      const input = document.createElement("input");
-      input.className = "pinterest-gallery-search";
-      input.type = "text";
-      input.placeholder = "Search Pinterest...";
-      input.addEventListener("keydown", (e) => e.stopPropagation());
-      controls.append(modeSelect, input);
-
-      const status = document.createElement("div");
-      status.className = "pinterest-gallery-status";
-      const grid = document.createElement("div");
-      grid.className = "pinterest-gallery-grid";
-      const sentinel = document.createElement("div");
-      sentinel.style.height = "1px";
-      grid.appendChild(sentinel);
-      wrap.append(controls, boardSelect, status, grid);
-
-      let mode = "search";
-      let currentQuery = "";
-      let currentBoard = "";
-      let bookmark = null;
-      let loading = false;
-      let debounceTimer = null;
-      let requestGeneration = 0;
-      let activeController = null;
-
-      const cancelActiveRequest = () => {
-        activeController?.abort();
-        activeController = null;
-        loading = false;
-      };
-
-      const startRequest = () => {
-        const controller = new AbortController();
-        activeController = controller;
-        loading = true;
-        return controller;
-      };
-
-      const finishRequest = (controller) => {
-        if (activeController !== controller) return;
-        activeController = null;
-        loading = false;
-      };
-
-      const clearResults = () => {
-        grid.querySelectorAll(".pinterest-gallery-thumb").forEach((el) => el.remove());
-        bookmark = null;
-      };
-
-      const setSelected = (item, imgEl) => {
-        grid.querySelectorAll(".pinterest-gallery-thumb.selected").forEach((el) => el.classList.remove("selected"));
-        imgEl.classList.add("selected");
-        if (selectedWidget) {
-          selectedWidget.value = JSON.stringify({ id: item.id, image_url: item.image_url });
-          node.setDirtyCanvas?.(true, true);
-        }
-      };
-
-      const addItems = (items) => {
-        for (const item of items) {
-          if (!item?.thumbnail_url || !item?.image_url) continue;
-          const img = document.createElement("img");
-          img.className = "pinterest-gallery-thumb";
-          img.src = item.thumbnail_url;
-          img.loading = "lazy";
-          img.addEventListener("click", () => setSelected(item, img));
-          grid.insertBefore(img, sentinel);
-        }
-      };
-
-      const request = async (url, options, signal) => {
-        const resp = await fetch(url, { ...(options || {}), signal });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || "Pinterest request failed");
-        return data;
-      };
-
-      const requestItems = async (url, options, generation, emptyMessage) => {
-        if (loading) return;
-        const controller = startRequest();
-        status.textContent = "Loading...";
-        try {
-          const data = await request(url, options, controller.signal);
-          if (generation !== requestGeneration) return;
-          addItems(data.items || []);
-          bookmark = data.bookmark || null;
-          status.textContent = data.items?.length ? "" : emptyMessage;
-        } catch (err) {
-          if (err.name === "AbortError") return;
-          if (generation === requestGeneration) {
-            status.textContent = err.message || "Pinterest request failed";
-            bookmark = null;
-          }
-        } finally {
-          finishRequest(controller);
-        }
-      };
-
-      const runSearch = (query, nextBookmark, generation) => requestItems(
-        "/pinterest_gallery/search",
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query, bookmark: nextBookmark }) },
-        generation,
-        "No results"
-      );
-
-      const runBoardPins = (boardId, nextBookmark, generation) => {
-        if (!boardId) return;
-        const suffix = nextBookmark ? `?bookmark=${encodeURIComponent(nextBookmark)}` : "";
-        return requestItems(`/pinterest_gallery/boards/${encodeURIComponent(boardId)}/pins${suffix}`, undefined, generation, "No pins found");
-      };
-
-      const loadBoards = async (generation) => {
-        if (loading) return;
-        const controller = startRequest();
-        status.textContent = "Loading boards...";
-        boardSelect.disabled = true;
-        try {
-          const boards = [];
-          const seenBookmarks = new Set();
-          let nextBookmark = null;
-          do {
-            const suffix = nextBookmark ? `?bookmark=${encodeURIComponent(nextBookmark)}` : "";
-            const data = await request(`/pinterest_gallery/boards${suffix}`, undefined, controller.signal);
-            if (generation !== requestGeneration) return;
-            boards.push(...(data.items || []));
-            nextBookmark = data.bookmark || null;
-            if (nextBookmark && seenBookmarks.has(nextBookmark)) break;
-            if (nextBookmark) seenBookmarks.add(nextBookmark);
-          } while (nextBookmark);
-
-          boardSelect.innerHTML = '<option value="">Select a board...</option>';
-          for (const board of boards) {
-            const option = document.createElement("option");
-            option.value = board.id;
-            option.textContent = board.name || board.id;
-            boardSelect.appendChild(option);
-          }
-          boardSelect.disabled = false;
-          status.textContent = boards.length ? "" : "No boards found";
-        } catch (err) {
-          if (err.name === "AbortError") return;
-          if (generation === requestGeneration) status.textContent = err.message || "Unable to load boards";
-        } finally {
-          finishRequest(controller);
-        }
-      };
-
-      modeSelect.addEventListener("change", () => {
-        cancelActiveRequest();
-        mode = modeSelect.value;
-        requestGeneration += 1;
-        currentQuery = "";
-        currentBoard = "";
-        clearResults();
-        status.textContent = "";
-        input.value = "";
-        input.style.display = mode === "search" ? "block" : "none";
-        boardSelect.style.display = mode === "boards" ? "block" : "none";
-        if (mode === "boards") loadBoards(requestGeneration);
+      const inline = createInlineGallery({
+        request,
+        getSelection: () => readSelection(this),
+        onPick: pin => outputSelection(this, pin),
+        onExpand: state => openForWorkflow(this, state),
+        onPreview: (pin, state) => openForWorkflow(this, { ...state, selected: pin }, true),
+        onSave: pin => openOverlay(openBoardSave, { pin }),
+        onAccount: () => openOverlay(openGalleryAccount),
+      });
+      const unsubscribeAccount = subscribeAccountChanges(inline.refreshAccount);
+      galleryByNode.set(this, inline);
+      inline.element.style.setProperty("--pgi-height", "100%");
+      this.addDOMWidget("pinterest_inline_gallery", "div", inline.element, {
+        serialize: false, hideOnZoom: true, margin: 0, getMinHeight: () => widgetHeight,
+        getValue: () => "", setValue: () => {},
       });
 
-      boardSelect.addEventListener("change", () => {
-        cancelActiveRequest();
-        currentBoard = boardSelect.value;
-        requestGeneration += 1;
-        clearResults();
-        status.textContent = "";
-        runBoardPins(currentBoard, null, requestGeneration);
-      });
-
-      input.addEventListener("input", () => {
-        clearTimeout(debounceTimer);
-        const query = input.value.trim();
-        if (query !== currentQuery) {
-          cancelActiveRequest();
-          requestGeneration += 1;
-          currentQuery = "";
-          clearResults();
-        }
-        if (!query) {
-          status.textContent = "";
-          return;
-        }
-        debounceTimer = setTimeout(() => {
-          if (query === currentQuery || mode !== "search") return;
-          currentQuery = query;
-          runSearch(query, null, requestGeneration);
-        }, 500);
-      });
-
-      const observer = new IntersectionObserver((entries) => {
-        if (!entries[0].isIntersecting || !bookmark || loading) return;
-        if (mode === "search" && currentQuery) runSearch(currentQuery, bookmark, requestGeneration);
-        if (mode === "boards" && currentBoard) runBoardPins(currentBoard, bookmark, requestGeneration);
-      }, { root: grid });
-      observer.observe(sentinel);
-
-      boardSelect.style.display = "none";
-      // ComfyUI stretches this widget's element to fill the node frame; the
-      // grid flex-fills that element and scrolls internally. Do NOT override
-      // computeSize from the element's content height — that feeds back into
-      // the node size and the frame grows without bound.
-      node.addDOMWidget("pinterest_gallery_ui", "div", wrap, { serialize: false });
-
-      // One-shot: give a tidy starting size, and shrink the oversized frame
-      // that an earlier build of this widget baked into saved workflows.
-      requestAnimationFrame(() => {
-        let [w, h] = node.size;
-        w = Math.max(w, 320);
-        if (h < 300 || h > 560) h = 380;
-        node.setSize([w, h]);
-        node.setDirtyCanvas?.(true, true);
-      });
-      const onRemoved = node.onRemoved;
-      node.onRemoved = function () {
-        clearTimeout(debounceTimer);
-        cancelActiveRequest();
-        observer.disconnect();
-        onRemoved?.apply(this, arguments);
+      const onConfigure = this.onConfigure;
+      this.onConfigure = (...config) => {
+        const configured = onConfigure?.apply(this, config);
+        if (this.title === "Pinterest Gallery Loader") this.title = galleryTitle;
+        this.setSize([Math.max(this.size[0], 300), Math.max(this.size[1], widgetHeight + 40)]);
+        inline.applySelection(readSelection(this));
+        return configured;
       };
+
+      const onRemoved = this.onRemoved;
+      this.onRemoved = (...args) => {
+        unsubscribeAccount();
+        inline.dispose();
+        galleryByNode.delete(this);
+        return onRemoved?.apply(this, args);
+      };
+
+      this.title = galleryTitle;
+      this.setSize([Math.max(this.size[0], 560), Math.max(this.size[1], 460)]);
+      return result;
     };
   },
 });

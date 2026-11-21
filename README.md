@@ -1,9 +1,10 @@
 # Pinterest Gallery Loader — ComfyUI custom node
 
-Search Pinterest from inside a ComfyUI node, browse your own Boards with a
-Pinterest API token, click a thumbnail, and load that pin's full-resolution
-image as an `IMAGE` output. Infinite-scroll grid, single selection, selection
-is saved into the workflow.
+Search Pinterest, filter by image orientation, and select a reference image
+directly in a ComfyUI node. The expanded gallery shows larger previews.
+With an authorized Pinterest account, you can browse your boards and save
+an existing Pin to a board you own. The selected image is saved in the
+workflow as a reference and loads as an `IMAGE` output when run.
 
 ## Install
 
@@ -12,17 +13,17 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/Boy-II/pinterest_gallery
 ```
 
-Then install the one runtime dependency into the **same** Python ComfyUI runs on:
+Install the dependencies into the **same** Python ComfyUI runs on:
 
 ```bash
-python -m pip install -r pinterest_gallery/requirements.txt   # just: requests
+python -m pip install -r pinterest_gallery/requirements.txt
 ```
 
-For the ComfyUI-aki portable build on Windows the embedded interpreter is
-`E:\ComfyUI-aki-v2\python\python.exe` (some builds name it `python_embeded`):
+For a portable Windows build, run the equivalent command from the portable
+installation directory. Use the Python interpreter supplied with your build.
 
 ```bat
-"E:\ComfyUI-aki-v2\python\python.exe" -m pip install requests
+python_embeded\python.exe -m pip install -r ComfyUI\custom_nodes\pinterest_gallery\requirements.txt
 ```
 
 Restart ComfyUI. The node appears as **Pinterest Gallery Loader** under
@@ -30,10 +31,16 @@ Restart ComfyUI. The node appears as **Pinterest Gallery Loader** under
 
 ### Optional: My Boards mode
 
-Search mode works without a token. To enable **My Boards**, create a Pinterest
-App and generate a sandbox or production access token with read access to
-Boards and standard Pins. Set the token only in the environment of the Python
-process that launches ComfyUI:
+Public search works without an account connection. Open **设置** on the node or
+**连接 Pinterest** in the expanded gallery to enter an existing access token or
+authorize through Pinterest. Both methods require an approved Pinterest
+Developer App and permission to read boards and standard Pins. For browser
+authorization, register the exact callback URL shown in the gallery under
+your app's **Redirect URIs**.
+Choose **Production** for your regular boards or **Sandbox** for sandbox data.
+
+For command-line setup, pass the token in the environment of the Python process
+that launches ComfyUI.
 
 PowerShell:
 
@@ -43,18 +50,26 @@ $env:PINTEREST_API_ENV = "sandbox"  # use "production" for a production token
 python main.py
 ```
 
-Do not put the token in a workflow, source file, fixture, log, or browser
-request. The node sends it only from the Python backend to Pinterest's API.
+Keep the token out of workflow files, source code, test fixtures, and logs.
+The in-app connection form sends it directly to the local ComfyUI backend.
+On Windows, **在本机加密保存连接** stores the access token encrypted for your
+Windows account.
 
-The first version reads Boards and Pins only. It does not create, edit, delete,
-or publish Pinterest content, and it does not support Secret Boards.
+OAuth requests read access by default. **加入画板** can request write access.
+Saving requires a verifiable Pin ID, a board you own, and your confirmation.
+The save picker lists ordinary boards. If a public search result lacks a
+verifiable Pin ID, you can still select the image for a workflow.
+
+Open ComfyUI directly on its local loopback address for account settings and
+saving. Keep account management, account board browsing, and Pin-saving routes
+private when configuring remote access or a reverse proxy.
 
 Sandbox tokens must use the Sandbox API environment. Production tokens must use
 the production API environment; set `PINTEREST_API_ENV` accordingly.
 
-`PINTEREST_API_ENV` only accepts `sandbox` or `production`. If it's unset,
-misspelled, or any other value, **My Boards** returns a clear error but
-**Search still works** — a bad value never takes down the whole node.
+`PINTEREST_API_ENV` accepts `sandbox` or `production` and defaults to
+`sandbox`. An invalid value only affects account browsing. Public search
+remains available.
 
 ## Update
 
@@ -65,13 +80,14 @@ cd ComfyUI/custom_nodes/pinterest_gallery && git pull
 ## Usage
 
 1. Add **Pinterest Gallery Loader**.
-2. Type a query — thumbnails load in a 3-column grid.
-3. Scroll the grid — more results load automatically.
-4. Click a thumbnail — green border marks the selection.
-5. Wire the `IMAGE` output onward and queue the prompt; the full original-size
-   image is downloaded at run time.
-6. To browse your account, switch the mode selector to **My Boards**, choose a
-   Board, and scroll the grid to load more Pins.
+2. Search directly in the node, or select **我的画板** after connecting your account.
+3. Filter by orientation and click a thumbnail to set the workflow input.
+   **展开画廊** opens the full gallery with the current search, results, and selection.
+4. Click **加入画板** on a Pin, choose a destination board, and confirm. Pinterest
+   requires a verified Pin ID and write permission. The connection form requests
+   write permission when opened from this action.
+5. Queue the workflow to return the full-size image through its
+   existing `IMAGE` output.
 
 Running with nothing selected raises a clear node error.
 
