@@ -24,11 +24,21 @@ def test_parse_search_response_extracts_items_and_bookmark():
             "id": "111111111111111111",
             "thumbnail_url": "https://i.pinimg.com/236x/aa/bb/cc/aabbccdd.jpg",
             "image_url": "https://i.pinimg.com/originals/aa/bb/cc/aabbccdd.jpg",
+            "pin_id": None,
+            "source_url": None,
+            "source_image_url": "https://i.pinimg.com/originals/aa/bb/cc/aabbccdd.jpg",
+            "width": 1000,
+            "height": 1500,
         },
         {
             "id": "222222222222222222",
             "thumbnail_url": "https://i.pinimg.com/236x/ee/ff/gg/eeffgghh.jpg",
             "image_url": "https://i.pinimg.com/originals/ee/ff/gg/eeffgghh.jpg",
+            "pin_id": None,
+            "source_url": None,
+            "source_image_url": "https://i.pinimg.com/originals/ee/ff/gg/eeffgghh.jpg",
+            "width": 900,
+            "height": 900,
         },
     ]
     assert bookmark == "Y2JvYXJkX2ZlZWQ6NTA="
@@ -61,7 +71,9 @@ def test_parse_search_response_skips_results_missing_image_urls():
 def test_parse_boards_response_extracts_items_and_bookmark():
     items, bookmark = parse_boards_response(
         {
-            "items": [{"id": "b1", "name": "Ideas", "privacy": "PUBLIC", "pin_count": 3}],
+            "items": [
+                {"id": "b1", "name": "Ideas", "privacy": "PUBLIC", "pin_count": 3}
+            ],
             "bookmark": "next",
         }
     )
@@ -75,11 +87,24 @@ def test_parse_board_pins_chooses_preferred_thumbnail_and_largest_image():
             "items": [
                 {
                     "id": "p1",
+                    "title": "Editorial portrait",
                     "media": {
                         "images": {
-                            "150x150": {"url": "https://i.pinimg.com/150.jpg", "width": 150, "height": 150},
-                            "400x300": {"url": "https://i.pinimg.com/400.jpg", "width": 400, "height": 300},
-                            "orig": {"url": "https://i.pinimg.com/orig.jpg", "width": 1000, "height": 800},
+                            "150x150": {
+                                "url": "https://i.pinimg.com/150.jpg",
+                                "width": 150,
+                                "height": 150,
+                            },
+                            "400x300": {
+                                "url": "https://i.pinimg.com/400.jpg",
+                                "width": 400,
+                                "height": 300,
+                            },
+                            "orig": {
+                                "url": "https://i.pinimg.com/orig.jpg",
+                                "width": 1000,
+                                "height": 800,
+                            },
                         }
                     },
                 },
@@ -88,7 +113,19 @@ def test_parse_board_pins_chooses_preferred_thumbnail_and_largest_image():
             "bookmark": None,
         }
     )
-    assert items == [{"id": "p1", "thumbnail_url": "https://i.pinimg.com/400.jpg", "image_url": "https://i.pinimg.com/orig.jpg"}]
+    assert items == [
+        {
+            "id": "p1",
+            "thumbnail_url": "https://i.pinimg.com/400.jpg",
+            "image_url": "https://i.pinimg.com/orig.jpg",
+            "pin_id": None,
+            "source_url": None,
+            "source_image_url": "https://i.pinimg.com/orig.jpg",
+            "width": 1000,
+            "height": 800,
+            "title": "Editorial portrait",
+        }
+    ]
     assert bookmark is None
 
 
